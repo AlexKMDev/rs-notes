@@ -8,11 +8,9 @@ use std::io::File;
 use std::io::fs;
 use extra::getopts::{optopt, optflag, getopts, Opt};
 use extra::json;
-use std::result;
-use std::str;
 
 struct Note {
-  name: ~str,
+  id: uint,
   description: ~str,
   status: bool
 }
@@ -24,7 +22,7 @@ struct NoteDB {
 
 impl Note {
   fn to_json(&self) -> ~str {
-    ~r#"{"name": &self.name, "description": &self.description}"#
+    ~r#"{"id": self.id, "description": self.description}"#
   }
 }
 
@@ -49,7 +47,7 @@ impl NoteDB {
     let parsed_notes = json::from_str(json_notes);
 
     if parsed_notes.is_err() {
-      fail!("corrupted db! Resetting...");
+      println!("corrupted db! Resetting...");
       self.reset();
     }
   }
@@ -60,24 +58,36 @@ impl NoteDB {
     file.write_str("{}");
   }
 
-  fn add_note(&self) {
+  fn add_note(& mut self) -> uint {
+    let note_id = self.return_next_id();
     let note = Note {
-      name: ~"test",
+      id: note_id,
       description: ~"test",
       status: false
     };
 
-    println!("{:?}", note.to_json());
-    (~self.notes).push(note);
-    //let mut db = File::open();
+    self.notes.push(note);
+    note_id
   }
 
-  fn save_and_close(&self) {
-    let notes = ~self.notes;
+  fn return_next_id(&self) -> uint {
+    self.notes.len()
+  }
 
-    for &note in notes.iter() {
-      println!("note: {:?}", note);
+  fn save_and_close(& mut self) {
+    let mut db = File::create(&self.path);
+    db.write_str(self.to_json());
+    println!("{}", self.to_json());
+  }
+
+  fn to_json(& mut self) -> ~str {
+    let mut notes_in_json = ~"{[";
+    
+    for note in self.notes.iter() {
+      notes_in_json = notes_in_json + note.to_json();
     }
+
+    notes_in_json + "]}"
   }
 }
 
@@ -91,13 +101,13 @@ fn print_help(program: &str) {
 fn main() {
   let args = os::args();
   
-  let db = NoteDB::new();
+  let mut db = NoteDB::new();
   db.prepare();
 
-  db.save_and_close();
+  // just tests
   db.add_note();
-
-  //println!("hmmm {:?}", args.tail());
+  //db.add_note();
+  db.save_and_close();
 
   let commands = ~[
     optflag("h"),
