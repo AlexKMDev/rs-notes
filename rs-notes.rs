@@ -4,10 +4,11 @@ extern mod extra;
 
 use std::os;
 use std::os::homedir;
-use std::io::File;
+use std::io::{File, io_error, Open, ReadWrite, Truncate};
 use std::io::fs;
 use extra::getopts::{optopt, optflag, getopts, Opt};
 use extra::json;
+use extra::json::{Json, Decoder};
 
 struct Note {
   id: uint,
@@ -16,13 +17,14 @@ struct Note {
 }
 
 struct NoteDB {
+  db: File,
   path: Path,
   notes: ~[Note],
 }
 
 impl Note {
   fn to_json(&self) -> ~str {
-    ~r#"{"id": self.id, "description": self.description}"#
+    "{\"id\": " + self.id.to_str() + ", \"description\": \"" + self.description + "\"}"
   }
 }
 
@@ -30,36 +32,67 @@ impl NoteDB {
   fn new() -> NoteDB {
     let mut db_path = homedir().unwrap();
     db_path.push(".rs-notes");
-    
-    if !db_path.exists() {
-      File::create(&db_path);
+
+    println!("path: {}", db_path.display());
+    let db = if db_path.exists() {
+      match File::open_mode(&db_path, Open, ReadWrite) {
+        Some(x) => x,
+        None => {
+          fail!("Failed to open db.")
+        }
+      }
+    } else {
+      match File::open_mode(&db_path, Truncate, ReadWrite) {
+        Some(x) => x,
+        None => {
+          fail!("Failed to create db.")
+        }
+      }
     };
 
     NoteDB {
+      db: db,
       path: db_path,
       notes: ~[]
     }
   }
 
-  fn prepare(&self) {
-    let mut db = File::open(&self.path);
-    let json_notes = db.read_to_str();
-    let parsed_notes = json::from_str(json_notes);
+  fn prepare(& mut self) {
+    let json_notes = self.db.read_to_str();
 
-    if parsed_notes.is_err() {
-      println!("corrupted db! Resetting...");
-      self.reset();
-    }
+    println!("decode: {:?}", json::from_str(json_notes).unwrap());
+    let parsed_notes = match json::from_str(json_notes) {
+      Ok(x) => {
+        x
+      },
+      Err(e) => {
+        self.reset();
+        fail!("Failed to parse db");
+      }
+    };
+
+    //println!("pretty: {:?}", parsed_notes.to_pretty_str());
+    //let decoder = Decoder::new(parsed_notes);
   }
 
-  fn reset(&self) {
-    fs::unlink(&self.path);
-    let mut file = File::create(&self.path);
-    file.write_str("{}");
+  fn reset(& mut self) {
+    self.truncate();
+    self.db.write_str("{}");
+  }
+
+  fn truncate(& mut self) {
+    self.db = match File::open_mode(&self.path, Truncate, ReadWrite) {
+      Some(x) => x,
+      None => {
+        fail!("Failed to open db.");
+      }
+    };
   }
 
   fn add_note(& mut self) -> uint {
     let note_id = self.return_next_id();
+
+    println!("next id: {}", note_id);
     let note = Note {
       id: note_id,
       description: ~"test",
@@ -75,19 +108,26 @@ impl NoteDB {
   }
 
   fn save_and_close(& mut self) {
-    let mut db = File::create(&self.path);
-    db.write_str(self.to_json());
-    println!("{}", self.to_json());
+    self.truncate();
+    let notes = self.to_json();
+
+    self.db.write_str(notes);
   }
 
   fn to_json(& mut self) -> ~str {
-    let mut notes_in_json = ~"{[";
+    let mut notes_in_json = ~"[";
     
     for note in self.notes.iter() {
       notes_in_json = notes_in_json + note.to_json();
     }
 
-    notes_in_json + "]}"
+    notes_in_json + "]"
+  }
+
+  fn list(&self) {
+    for note in self.notes.iter() {
+      println!("{}: {}", note.id, note.description);
+    }
   }
 }
 
@@ -107,6 +147,7 @@ fn main() {
   // just tests
   db.add_note();
   //db.add_note();
+  db.list();
   db.save_and_close();
 
   let commands = ~[
