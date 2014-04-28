@@ -115,18 +115,16 @@ impl NoteDB {
 
   fn to_json(& mut self) -> ~str {
     let mut notes_in_json = ~"[";
-    let mut it = self.notes.iter();
+    //println!("notes {:?}", self.notes);
 
-    for n in range(1, it.len()) {
-      match it.next() {
-        Some(x) => {
-          notes_in_json = notes_in_json + x.to_json() + ~",";
-        },
-        None => break
+    for n in range(0, self.notes.len()) {
+      //println!("{:?}, {}, {}", self.notes[n], n, self.notes.len());
+      notes_in_json.push_str(self.notes[n].to_json());
+
+      if n != self.notes.len() - 1 {
+        notes_in_json.push_str(~",");
       }
     }
-
-    //notes_in_json = notes_in_json.as_slice();
 
     notes_in_json + "]"
   }
@@ -154,6 +152,7 @@ fn main() {
   db.prepare();
 
   // just tests
+  db.add_note();
   db.add_note();
   db.add_note();
   db.list();
