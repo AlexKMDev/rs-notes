@@ -1,14 +1,13 @@
-#[crate_id = "rs-notes#0.0.1"];
-
-extern mod extra;
+extern crate getopts;
+extern crate serialize;
 
 use std::os;
 use std::os::homedir;
-use std::io::{File, io_error, Open, ReadWrite, Truncate};
+use std::io::{File, Open, ReadWrite, Truncate};
 use std::io::fs;
-use extra::getopts::{optopt, optflag, getopts, Opt};
-use extra::json;
-use extra::json::{Json, Decoder};
+use getopts::{optopt, optflag, getopts, Opt};
+use serialize::json;
+use serialize::json::{Json, Decoder};
 
 struct Note {
   id: uint,
@@ -30,23 +29,23 @@ impl Note {
 
 impl NoteDB {
   fn new() -> NoteDB {
-    let mut db_path = homedir().unwrap();
+    let mut db_path = match homedir() {
+      Some(x) => x,
+      None => fail!("Failed to get home directory.")
+    };
     db_path.push(".rs-notes");
 
     println!("path: {}", db_path.display());
+
     let db = if db_path.exists() {
       match File::open_mode(&db_path, Open, ReadWrite) {
-        Some(x) => x,
-        None => {
-          fail!("Failed to open db.")
-        }
+        Ok(x) => x,
+        Err(e) => fail!("Failed to open db. {}", e)
       }
     } else {
       match File::open_mode(&db_path, Truncate, ReadWrite) {
-        Some(x) => x,
-        None => {
-          fail!("Failed to create db.")
-        }
+        Ok(x) => x,
+        Err(e) => fail!("Failed to create db. {}", e)
       }
     };
 
@@ -58,13 +57,15 @@ impl NoteDB {
   }
 
   fn prepare(& mut self) {
-    let json_notes = self.db.read_to_str();
+    let json_notes = match self.db.read_to_str() {
+      Ok(f) => f,
+      Err(e) => fail!("Failed to read db. {}", e)
+    };
 
-    println!("decode: {:?}", json::from_str(json_notes).unwrap());
+    println!("notes: {}", json_notes);
+
     let parsed_notes = match json::from_str(json_notes) {
-      Ok(x) => {
-        x
-      },
+      Ok(x) => x,
       Err(e) => {
         self.reset();
         fail!("Failed to parse db");
@@ -82,10 +83,8 @@ impl NoteDB {
 
   fn truncate(& mut self) {
     self.db = match File::open_mode(&self.path, Truncate, ReadWrite) {
-      Some(x) => x,
-      None => {
-        fail!("Failed to open db.");
-      }
+      Ok(x) => x,
+      Err(e) => fail!("Failed to open db. {}", e)
     };
   }
 
@@ -116,57 +115,62 @@ impl NoteDB {
 
   fn to_json(& mut self) -> ~str {
     let mut notes_in_json = ~"[";
-    
-    for note in self.notes.iter() {
-      notes_in_json = notes_in_json + note.to_json();
+    let mut it = self.notes.iter();
+
+    for n in range(1, it.len()) {
+      match it.next() {
+        Some(x) => {
+          notes_in_json = notes_in_json + x.to_json() + ~",";
+        },
+        None => break
+      }
     }
+
+    //notes_in_json = notes_in_json.as_slice();
 
     notes_in_json + "]"
   }
 
   fn list(&self) {
     for note in self.notes.iter() {
-      println!("{}: {}", note.id, note.description);
+      println!("{0}: {1}", note.id, note.description);
     }
   }
 }
 
 fn print_help(program: &str) {
   println!("Usage {} [options]", program);
-  println("-h --help\t\tUsage");
-  println("-a --add <note>\t\tAdd note with <name>");
-  println("-d --delete <note>\t\tDelete note");
+  println!("-h --help\t\tUsage");
+  println!("-a --add NAME\t\tAdd note with NAME");
+  println!("-d --delete NAME\t\tDelete note by NAME");
 }
 
 fn main() {
   let args = os::args();
+  println!("started!!!");
   
   let mut db = NoteDB::new();
+
   db.prepare();
 
   // just tests
   db.add_note();
-  //db.add_note();
+  db.add_note();
   db.list();
   db.save_and_close();
 
   let commands = ~[
-    optflag("h"),
-    optflag("help"),
-    optflag("a"),
-    optflag("add"),
-    optflag("d"),
-    optflag("delete")
+    optflag("h", "help", "print help"),
+    optopt("a", "add", "add note", "NAME"),
+    optopt("d", "delete", "delete note", "NAME")
   ];
 
   let matches = match getopts(args.tail(), commands) {
     Ok(m) => m,
-    Err(f) => {
-      fail!(f.to_err_msg());
-    }
+    Err(f) => fail!(f.to_err_msg())
   };
 
-  if matches.opt_present("h") || matches.opt_present("help") {;
+  if matches.opt_present("h") {
     print_help(args[0].clone());
   }
 }
