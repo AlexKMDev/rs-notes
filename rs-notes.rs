@@ -1,29 +1,50 @@
 extern crate getopts;
 extern crate serialize;
+extern crate collections;
 
 use std::os;
 use std::os::homedir;
 use std::io::{File, Open, ReadWrite, Truncate};
-use std::io::fs;
-use getopts::{optopt, optflag, getopts, Opt};
-use serialize::json;
-use serialize::json::{Json, Decoder};
+use getopts::{optopt, optflag, getopts};
+use serialize::{json, Decodable, Encodable};
+use serialize::json::{Json, ToJson};
+use collections::TreeMap;
 
-struct Note {
+#[deriving(Decodable, Encodable)]
+pub struct Note {
   id: uint,
-  description: ~str,
-  status: bool
+  description: ~str
 }
 
-struct NoteDB {
+#[deriving(Decodable, Encodable)]
+pub struct Notes {
+  data: ~[Note]
+}
+
+pub struct NoteDB {
   db: File,
   path: Path,
-  notes: ~[Note],
+  notes: Notes
 }
 
-impl Note {
-  fn to_json(&self) -> ~str {
-    "{\"id\": " + self.id.to_str() + ", \"description\": \"" + self.description + "\"}"
+impl ToJson for Note {
+  fn to_json(&self) -> json::Json {
+    let mut d = ~TreeMap::new();
+
+    d.insert(~"id", self.id.to_json());
+    d.insert(~"description", self.description.to_json());
+
+    json::Object(d)
+  }
+}
+
+impl ToJson for Notes {
+  fn to_json(&self) -> json::Json {
+    let mut d = ~TreeMap::new();
+
+    d.insert(~"data", self.data.to_json());
+
+    json::Object(d)
   }
 }
 
@@ -31,54 +52,47 @@ impl NoteDB {
   fn new() -> NoteDB {
     let mut db_path = match homedir() {
       Some(x) => x,
-      None => fail!("Failed to get home directory.")
+      None => fail!("error: failed to determine home directory.")
     };
     db_path.push(".rs-notes");
-
-    println!("path: {}", db_path.display());
 
     let db = if db_path.exists() {
       match File::open_mode(&db_path, Open, ReadWrite) {
         Ok(x) => x,
-        Err(e) => fail!("Failed to open db. {}", e)
+        Err(e) => fail!("error: failed to open db, {}", e)
       }
     } else {
       match File::open_mode(&db_path, Truncate, ReadWrite) {
         Ok(x) => x,
-        Err(e) => fail!("Failed to create db. {}", e)
+        Err(e) => fail!("error: failed to create db, {}", e)
       }
     };
 
     NoteDB {
       db: db,
       path: db_path,
-      notes: ~[]
+      notes: Notes { data: ~[] }
     }
   }
 
-  fn prepare(& mut self) {
-    let json_notes = match self.db.read_to_str() {
-      Ok(f) => f,
-      Err(e) => fail!("Failed to read db. {}", e)
-    };
+  fn load_notes(& mut self) {
+    self.check();
 
-    println!("notes: {}", json_notes);
-
-    let parsed_notes = match json::from_str(json_notes) {
+    let raw_notes = match self.db.read_to_str() {
       Ok(x) => x,
-      Err(e) => {
-        self.reset();
-        fail!("Failed to parse db");
-      }
+      Err(e) => fail!("error: failed to read notes, {}", e)
     };
 
-    //println!("pretty: {:?}", parsed_notes.to_pretty_str());
-    //let decoder = Decoder::new(parsed_notes);
-  }
+    let notes_in_json = match json::from_str(raw_notes) {
+      Ok(x) => x,
+      Err(e) => fail!("error: failed to parse raw notes, {}", e)
+    };
 
-  fn reset(& mut self) {
-    self.truncate();
-    self.db.write_str("{}");
+    let mut decoder = json::Decoder::new(notes_in_json);
+    self.notes = match Decodable::decode(&mut decoder) {
+      Ok(v) => v,
+      Err(e) => fail!("error: failed to convert string to json object, {}", e)
+    };
   }
 
   fn truncate(& mut self) {
@@ -88,49 +102,74 @@ impl NoteDB {
     };
   }
 
-  fn add_note(& mut self) -> uint {
-    let note_id = self.return_next_id();
+  fn reopen(& mut self) {
+    self.db = match File::open_mode(&self.path, Open, ReadWrite) {
+      Ok(x) => x,
+      Err(e) => fail!("error: failed to open db, {}", e)
+    };
+  }
 
-    println!("next id: {}", note_id);
-    let note = Note {
-      id: note_id,
-      description: ~"test",
-      status: false
+  fn check(& mut self) {
+    let data = match self.db.read_to_str() {
+      Ok(x) => x,
+      Err(e) => fail!("error: failed to read notes, {}", e)
     };
 
-    self.notes.push(note);
-    note_id
+    if data.len() == 0 {
+      self.save();
+    }
+
+    self.reopen();
+  }
+
+  fn add_note(& mut self, text: ~str) {
+    let note_id = self.return_next_id();
+
+    let note = Note {
+      id: note_id,
+      description: text
+    };
+
+    self.notes.data.push(note);
+
+    println!("info: added note with id {}", note_id);
+  }
+
+  fn delete_at(& mut self, id: uint) {
+    match self.notes.data.remove(id - 1) {
+      Some(x) => {
+        println!("info: deleted note at {} id", id);
+        x
+      },
+      None => fail!("error: failed to delete note.")
+    };
   }
 
   fn return_next_id(&self) -> uint {
-    self.notes.len()
-  }
-
-  fn save_and_close(& mut self) {
-    self.truncate();
-    let notes = self.to_json();
-
-    self.db.write_str(notes);
-  }
-
-  fn to_json(& mut self) -> ~str {
-    let mut notes_in_json = ~"[";
-    //println!("notes {:?}", self.notes);
-
-    for n in range(0, self.notes.len()) {
-      //println!("{:?}, {}, {}", self.notes[n], n, self.notes.len());
-      notes_in_json.push_str(self.notes[n].to_json());
-
-      if n != self.notes.len() - 1 {
-        notes_in_json.push_str(~",");
-      }
+    match self.notes.data.last() {
+      Some(x) => x.id + 1,
+      None => 0
     }
+  }
 
-    notes_in_json + "]"
+  fn save(& mut self) {
+    self.truncate();
+    let notes = self.notes.to_json().to_str();
+
+    match self.db.write_str(notes) {
+      Ok(x) => x,
+      Err(e) => fail!("error: failed to save database changes, {}", e)
+    };
+
+    self.reopen();
   }
 
   fn list(&self) {
-    for note in self.notes.iter() {
+    if self.notes.data.len() == 0 {
+      println!("info: no notes found. Try --help");
+    }
+
+    for note in self.notes.data.iter() {
       println!("{0}: {1}", note.id, note.description);
     }
   }
@@ -139,29 +178,22 @@ impl NoteDB {
 fn print_help(program: &str) {
   println!("Usage {} [options]", program);
   println!("-h --help\t\tUsage");
+  println!("-l --list\t\tList notes");
   println!("-a --add NAME\t\tAdd note with NAME");
-  println!("-d --delete NAME\t\tDelete note by NAME");
+  println!("-d --delete ID\t\tDelete note by ID");
 }
 
 fn main() {
   let args = os::args();
-  println!("started!!!");
-  
   let mut db = NoteDB::new();
-
-  db.prepare();
-
-  // just tests
-  db.add_note();
-  db.add_note();
-  db.add_note();
-  db.list();
-  db.save_and_close();
+  db.load_notes();
 
   let commands = ~[
     optflag("h", "help", "print help"),
     optopt("a", "add", "add note", "NAME"),
-    optopt("d", "delete", "delete note", "NAME")
+    optopt("d", "delete", "delete note", "NAME"),
+    optflag("l", "list", "list notes"),
+    optflag("r", "reset", "reset notes database")
   ];
 
   let matches = match getopts(args.tail(), commands) {
@@ -172,4 +204,33 @@ fn main() {
   if matches.opt_present("h") {
     print_help(args[0].clone());
   }
+
+  if matches.opt_present("l") {
+    db.list();
+  }
+
+  if matches.opt_present("a") {
+    match matches.opt_str("a") {
+      Some(x) => db.add_note(x),
+      None => fail!("Failed to add note.")
+    };
+  }
+
+  if matches.opt_present("d") {
+    match matches.opt_str("d") {
+      Some(x) => {
+        match from_str::<uint>(x) {
+          Some(x) => db.delete_at(x),
+          None => fail!("Failed to convert string to integer.")
+        }
+      },
+      None => fail!("Failed to delete note.")
+    };
+  }
+
+  if matches.opt_present("r") {
+    db.check();
+  }
+
+  db.save();
 }
